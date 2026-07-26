@@ -19,6 +19,18 @@ function todayISO() {
   return d.toISOString().slice(0, 10);
 }
 
+function lastNDays(n) {
+  const days = [];
+  const base = new Date(todayISO() + "T00:00:00");
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(base);
+    d.setDate(d.getDate() - i);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
 function formatDateLabel(iso) {
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
@@ -156,16 +168,27 @@ export default function DiarioMigrana() {
   };
 
   const history = useMemo(() => {
-    return Object.entries(allEntries)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .slice(-14)
-      .map(([day, e]) => ({
+    return lastNDays(14).map((day) => {
+      const e = allEntries[day];
+      if (!e) {
+        return {
+          day,
+          label: formatDateLabel(day),
+          intensidad: null,
+          duracion: null,
+          tuvoMigrana: null,
+          sinRegistro: true,
+        };
+      }
+      return {
         day,
         label: formatDateLabel(day),
         intensidad: e.tuvoMigrana ? Number(e.intensidad) || 0 : 0,
         duracion: e.tuvoMigrana ? Number(e.duracionHoras) || 0 : 0,
         tuvoMigrana: e.tuvoMigrana,
-      }));
+        sinRegistro: false,
+      };
+    });
   }, [allEntries]);
 
   const diasConMigrana = useMemo(
@@ -508,7 +531,7 @@ export default function DiarioMigrana() {
           <div style={styles.eyebrow}>ÚLTIMOS 14 DÍAS</div>
           {loading ? (
             <p style={styles.mutedText}>Cargando...</p>
-          ) : history.length === 0 ? (
+          ) : Object.keys(allEntries).length === 0 ? (
             <p style={styles.mutedText}>Todavía no hay registros. Tu primer día aparecerá aquí.</p>
           ) : (
             <>
@@ -517,7 +540,7 @@ export default function DiarioMigrana() {
                 <ResponsiveContainer width="100%" height={180}>
                   <LineChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke={COLORS.hairline} vertical={false} />
-                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={10.5} tickLine={false} interval={1} />
                     <YAxis
                       domain={[0, 10]}
                       stroke={COLORS.muted}
@@ -543,7 +566,7 @@ export default function DiarioMigrana() {
                 <ResponsiveContainer width="100%" height={140}>
                   <BarChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke={COLORS.hairline} vertical={false} />
-                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={10.5} tickLine={false} interval={1} />
                     <YAxis
                       domain={[0, 1]}
                       ticks={[0, 1]}
@@ -557,7 +580,7 @@ export default function DiarioMigrana() {
                     <Tooltip
                       contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.hairline}`, borderRadius: 8, fontFamily: "Inter, sans-serif", fontSize: 12 }}
                       labelStyle={{ color: COLORS.ink }}
-                      formatter={(v, n, p) => [p.payload.tuvoMigrana ? "Sí" : "No", "Migraña"]}
+                      formatter={(v, n, p) => [p.payload.sinRegistro ? "Sin registro" : p.payload.tuvoMigrana ? "Sí" : "No", "Migraña"]}
                     />
                     <Bar dataKey={(d) => (d.tuvoMigrana ? 1 : 0)} radius={[4, 4, 0, 0]}>
                       {history.map((h, i) => (
@@ -573,7 +596,7 @@ export default function DiarioMigrana() {
                 <ResponsiveContainer width="100%" height={160}>
                   <BarChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke={COLORS.hairline} vertical={false} />
-                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={10.5} tickLine={false} interval={1} />
                     <YAxis
                       stroke={COLORS.muted}
                       fontSize={11}
