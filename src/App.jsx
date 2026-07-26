@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 const COLORS = {
   bg: "#F1EEF7",
@@ -163,9 +163,15 @@ export default function DiarioMigrana() {
         day,
         label: formatDateLabel(day),
         intensidad: e.tuvoMigrana ? Number(e.intensidad) || 0 : 0,
+        duracion: e.tuvoMigrana ? Number(e.duracionHoras) || 0 : 0,
         tuvoMigrana: e.tuvoMigrana,
       }));
   }, [allEntries]);
+
+  const diasConMigrana = useMemo(
+    () => history.filter((h) => h.tuvoMigrana).length,
+    [history]
+  );
 
   if (!profile || showSettings) {
     return (
@@ -505,21 +511,86 @@ export default function DiarioMigrana() {
           ) : history.length === 0 ? (
             <p style={styles.mutedText}>Todavía no hay registros. Tu primer día aparecerá aquí.</p>
           ) : (
-            <div style={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={180}>
-                <LineChart data={history} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid stroke={COLORS.hairline} vertical={false} />
-                  <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
-                  <YAxis domain={[0, 10]} stroke={COLORS.muted} fontSize={11} tickLine={false} width={30} />
-                  <Tooltip
-                    contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.hairline}`, borderRadius: 8, fontFamily: "Inter, sans-serif", fontSize: 12 }}
-                    labelStyle={{ color: COLORS.ink }}
-                    formatter={(v, n, p) => [p.payload.tuvoMigrana ? `${v}/10` : "sin migraña", "Intensidad"]}
-                  />
-                  <Line type="monotone" dataKey="intensidad" stroke={COLORS.violet} strokeWidth={2} dot={{ r: 3, fill: COLORS.violet }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <>
+              <div style={styles.chartWrap}>
+                <div style={styles.chartTitle}>Intensidad del dolor</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke={COLORS.hairline} vertical={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <YAxis
+                      domain={[0, 10]}
+                      stroke={COLORS.muted}
+                      fontSize={11}
+                      tickLine={false}
+                      width={70}
+                      label={{ value: "Intensidad (0-10)", angle: -90, position: "insideLeft", style: { fill: COLORS.muted, fontSize: 11, textAnchor: "middle" } }}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.hairline}`, borderRadius: 8, fontFamily: "Inter, sans-serif", fontSize: 12 }}
+                      labelStyle={{ color: COLORS.ink }}
+                      formatter={(v, n, p) => [p.payload.tuvoMigrana ? `${v}/10` : "sin migraña", "Intensidad"]}
+                    />
+                    <Line type="monotone" dataKey="intensidad" stroke={COLORS.violet} strokeWidth={2} dot={{ r: 3, fill: COLORS.violet }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ ...styles.chartWrap, marginTop: 14 }}>
+                <div style={styles.chartTitle}>
+                  Días con migraña <span style={styles.chartSubtitle}>({diasConMigrana} de {history.length} días)</span>
+                </div>
+                <ResponsiveContainer width="100%" height={140}>
+                  <BarChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke={COLORS.hairline} vertical={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <YAxis
+                      domain={[0, 1]}
+                      ticks={[0, 1]}
+                      tickFormatter={(v) => (v === 1 ? "Sí" : "No")}
+                      stroke={COLORS.muted}
+                      fontSize={11}
+                      tickLine={false}
+                      width={70}
+                      label={{ value: "¿Migraña?", angle: -90, position: "insideLeft", style: { fill: COLORS.muted, fontSize: 11, textAnchor: "middle" } }}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.hairline}`, borderRadius: 8, fontFamily: "Inter, sans-serif", fontSize: 12 }}
+                      labelStyle={{ color: COLORS.ink }}
+                      formatter={(v, n, p) => [p.payload.tuvoMigrana ? "Sí" : "No", "Migraña"]}
+                    />
+                    <Bar dataKey={(d) => (d.tuvoMigrana ? 1 : 0)} radius={[4, 4, 0, 0]}>
+                      {history.map((h, i) => (
+                        <Cell key={i} fill={h.tuvoMigrana ? COLORS.coral : COLORS.hairline} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ ...styles.chartWrap, marginTop: 14 }}>
+                <div style={styles.chartTitle}>Duración (horas)</div>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={history} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke={COLORS.hairline} vertical={false} />
+                    <XAxis dataKey="label" stroke={COLORS.muted} fontSize={11} tickLine={false} />
+                    <YAxis
+                      stroke={COLORS.muted}
+                      fontSize={11}
+                      tickLine={false}
+                      width={70}
+                      label={{ value: "Horas", angle: -90, position: "insideLeft", style: { fill: COLORS.muted, fontSize: 11, textAnchor: "middle" } }}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.hairline}`, borderRadius: 8, fontFamily: "Inter, sans-serif", fontSize: 12 }}
+                      labelStyle={{ color: COLORS.ink }}
+                      formatter={(v) => [`${v} h`, "Duración"]}
+                    />
+                    <Bar dataKey="duracion" fill={COLORS.teal} radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </>
           )}
         </section>
 
@@ -723,7 +794,19 @@ const styles = {
     background: COLORS.surface,
     border: `1px solid ${COLORS.hairline}`,
     borderRadius: 14,
-    padding: "16px 8px 4px",
+    padding: "14px 10px 4px",
+  },
+  chartTitle: {
+    fontSize: 13.5,
+    fontWeight: 500,
+    color: COLORS.ink,
+    padding: "0 6px",
+    marginBottom: 4,
+  },
+  chartSubtitle: {
+    fontWeight: 400,
+    color: COLORS.muted,
+    fontSize: 12.5,
   },
   footer: {
     marginTop: 36,
