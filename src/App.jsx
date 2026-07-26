@@ -535,6 +535,7 @@ export default function DiarioMigrana() {
 function shiftDate(iso, delta, setDate) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + delta);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   setDate(d.toISOString().slice(0, 10));
 }
 
