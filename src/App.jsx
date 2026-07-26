@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import * as XLSX from "xlsx";
+import { supabase } from "./supabaseClient";
 
 const COLORS = {
   bg: "#F1EEF7",
@@ -96,7 +98,43 @@ const EMPTY_PROFILE = {
   seguimientoCiclo: null,
 };
 
+const PRIVACY_SECTIONS = [
+  {
+    title: "Qué datos guardamos",
+    body:
+      "Tu perfil (rango de edad, sexo, idioma, si activas seguimiento de ciclo menstrual) y cada registro diario que escribas: si tuviste migraña, intensidad, duración, sueño, hidratación, estrés, medicación, ánimo, ciclo y tus notas libres.",
+  },
+  {
+    title: "Por qué es un dato sensible",
+    body:
+      "Esta es información de salud. La tratamos con más cuidado que un dato normal: solo tú puedes verla, ligada a tu cuenta, y nunca se mezcla con la de otros usuarios.",
+  },
+  {
+    title: "Para qué se usa",
+    body:
+      "Únicamente para mostrarte a ti tus propios registros y gráficas. No se usa para publicidad, no se vende ni se comparte con terceros, y no se analiza para darte consejos ni diagnósticos automáticos.",
+  },
+  {
+    title: "Dónde se almacena",
+    body:
+      "En una base de datos gestionada por Supabase, protegida con reglas de seguridad que impiden que cualquier otra cuenta acceda a tus datos, incluso a nivel de base de datos.",
+  },
+  {
+    title: "Tus derechos",
+    body:
+      "Puedes exportar todos tus registros a Excel cuando quieras con el botón correspondiente. Si quieres eliminar tu cuenta y todos tus datos permanentemente, contacta a través del correo indicado abajo.",
+  },
+  {
+    title: "Importante",
+    body:
+      "Esta app es solo una herramienta de registro personal. No sustituye el diagnóstico, seguimiento o consejo de un profesional de la salud.",
+  },
+];
+
 export default function DiarioMigrana() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [date, setDate] = useState(todayISO());
   const [entry, setEntry] = useState(EMPTY_ENTRY);
   const [allEntries, setAllEntries] = useState({});
@@ -106,18 +144,45 @@ export default function DiarioMigrana() {
   const [profile, setProfile] = useState(null);
   const [profileDraft, setProfileDraft] = useState(EMPTY_PROFILE);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPrivacyMain, setShowPrivacyMain] = useState(false);
 
   useEffect(() => {
-    loadAll();
-    try {
-      const stored = localStorage.getItem("profile");
-      if (stored) setProfile(JSON.parse(stored));
-    } catch (e) {}
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => listener.subscription.unsubscribe();
   }, []);
 
-  function saveProfile(p) {
+  useEffect(() => {
+    if (!session) return;
+    loadAll();
+    loadProfile();
+  }, [session]);
+
+  async function loadProfile() {
     try {
-      localStorage.setItem("profile", JSON.stringify(p));
+      const { data, error: err } = await supabase
+        .from("profiles")
+        .select("data")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+      if (err) throw err;
+      if (data) setProfile(data.data);
+    } catch (e) {
+      setError("No se pudo cargar el perfil.");
+    }
+  }
+
+  async function saveProfile(p) {
+    try {
+      const { error: err } = await supabase
+        .from("profiles")
+        .upsert({ user_id: session.user.id, data: p, updated_at: new Date().toISOString() });
+      if (err) throw err;
       setProfile(p);
       setShowSettings(false);
     } catch (e) {
@@ -130,19 +195,18 @@ export default function DiarioMigrana() {
     setSaved(false);
   }, [date, allEntries]);
 
-  function loadAll() {
+  async function loadAll() {
     setLoading(true);
     try {
+      const { data, error: err } = await supabase
+        .from("entries")
+        .select("day, data")
+        .eq("user_id", session.user.id);
+      if (err) throw err;
       const results = {};
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith("entry:")) {
-          try {
-            const day = k.replace("entry:", "");
-            results[day] = JSON.parse(localStorage.getItem(k));
-          } catch (e) {}
-        }
-      }
+      (data || []).forEach((row) => {
+        results[row.day] = row.data;
+      });
       setAllEntries(results);
     } catch (e) {
       setError("No se pudieron cargar los registros guardados.");
@@ -151,15 +215,42 @@ export default function DiarioMigrana() {
     }
   }
 
-  function saveEntry() {
+  async function saveEntry() {
     setError("");
     try {
-      localStorage.setItem(`entry:${date}`, JSON.stringify(entry));
+      const { error: err } = await supabase
+        .from("entries")
+        .upsert({ user_id: session.user.id, day: date, data: entry, updated_at: new Date().toISOString() });
+      if (err) throw err;
       setAllEntries((prev) => ({ ...prev, [date]: entry }));
       setSaved(true);
     } catch (e) {
       setError("No se pudo guardar el registro. Intenta de nuevo.");
     }
+  }
+
+  function exportarExcel() {
+    const filas = Object.entries(allEntries)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([day, e]) => ({
+        Fecha: day,
+        "Tuvo migraña": e.tuvoMigrana === true ? "Sí" : e.tuvoMigrana === false ? "No" : "",
+        "Intensidad (0-10)": e.tuvoMigrana ? e.intensidad : "",
+        "Duración (horas)": e.tuvoMigrana ? e.duracionHoras : "",
+        "Horas de sueño": e.suenoHoras,
+        "Vasos de agua": e.hidratacionVasos,
+        "Nivel de estrés (0-10)": e.estres,
+        "Tomó medicación": e.medicacion === true ? "Sí" : e.medicacion === false ? "No" : "",
+        Medicación: e.medicacionNota,
+        "Ciclo menstrual": e.cicloMenstrual === true ? "Sí" : e.cicloMenstrual === false ? "No" : "",
+        "Estado de ánimo (1-5)": e.estadoAnimo ?? "",
+        Notas: e.notas,
+        "Comentarios adicionales": e.comentariosAdicionales,
+      }));
+    const hoja = XLSX.utils.json_to_sheet(filas);
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Diario de migraña");
+    XLSX.writeFile(libro, `diario-migrana-${todayISO()}.xlsx`);
   }
 
   const update = (field) => (value) => {
@@ -195,6 +286,18 @@ export default function DiarioMigrana() {
     () => history.filter((h) => h.tuvoMigrana).length,
     [history]
   );
+
+  if (authLoading) {
+    return (
+      <div style={{ ...styles.page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <p style={styles.mutedText}>Cargando...</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen />;
+  }
 
   if (!profile || showSettings) {
     return (
@@ -280,7 +383,14 @@ export default function DiarioMigrana() {
               </button>
             )}
           </div>
+
+          <p style={{ textAlign: "center", marginTop: 16 }}>
+            <button type="button" onClick={() => setShowPrivacyMain(true)} style={styles.linkBtn}>
+              Ver aviso de privacidad
+            </button>
+          </p>
         </div>
+        {showPrivacyMain && <PrivacyModal onClose={() => setShowPrivacyMain(false)} />}
       </div>
     );
   }
@@ -312,17 +422,27 @@ export default function DiarioMigrana() {
         <header style={styles.header}>
           <div style={styles.headerTop}>
             <div style={styles.eyebrow}>REGISTRO PERSONAL</div>
-            <button
-              style={styles.settingsBtn}
-              onClick={() => {
-                setProfileDraft(profile || EMPTY_PROFILE);
-                setShowSettings(true);
-              }}
-              aria-label="Editar perfil"
-              title="Editar perfil"
-            >
-              ⚙
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                style={styles.settingsBtn}
+                onClick={() => {
+                  setProfileDraft(profile || EMPTY_PROFILE);
+                  setShowSettings(true);
+                }}
+                aria-label="Editar perfil"
+                title="Editar perfil"
+              >
+                ⚙
+              </button>
+              <button
+                style={styles.settingsBtn}
+                onClick={() => supabase.auth.signOut()}
+                aria-label="Cerrar sesión"
+                title="Cerrar sesión"
+              >
+                ⏻
+              </button>
+            </div>
           </div>
           <h1 style={styles.title}>Diario de migraña</h1>
           <p style={styles.subtitle}>
@@ -528,7 +648,14 @@ export default function DiarioMigrana() {
         </main>
 
         <section style={styles.historySection}>
-          <div style={styles.eyebrow}>ÚLTIMOS 14 DÍAS</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <div style={styles.eyebrow}>ÚLTIMOS 14 DÍAS</div>
+            {Object.keys(allEntries).length > 0 && (
+              <button style={styles.exportBtn} onClick={exportarExcel}>
+                ⬇ Exportar a Excel
+              </button>
+            )}
+          </div>
           {loading ? (
             <p style={styles.mutedText}>Cargando...</p>
           ) : Object.keys(allEntries).length === 0 ? (
@@ -620,10 +747,178 @@ export default function DiarioMigrana() {
         <footer style={styles.footer}>
           Este registro es solo para tu propio seguimiento. No ofrece diagnósticos ni
           recomendaciones — comparte estos datos con un profesional de salud si lo consideras útil.
+          <br />
+          <button type="button" onClick={() => setShowPrivacyMain(true)} style={{ ...styles.linkBtn, marginTop: 6 }}>
+            Aviso de privacidad
+          </button>
         </footer>
+      </div>
+      {showPrivacyMain && <PrivacyModal onClose={() => setShowPrivacyMain(false)} />}
+    </div>
+  );
+}
+
+function PrivacyModal({ onClose }) {
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <h2 style={{ ...styles.title, fontSize: 22, marginBottom: 4 }}>Aviso de privacidad</h2>
+          <button onClick={onClose} style={styles.modalClose} aria-label="Cerrar">
+            ✕
+          </button>
+        </div>
+        <p style={{ ...styles.subtitle, marginBottom: 18 }}>Resumen simple de cómo tratamos tus datos.</p>
+        {PRIVACY_SECTIONS.map((s) => (
+          <div key={s.title} style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{s.title}</div>
+            <div style={{ fontSize: 13.5, color: COLORS.muted, lineHeight: 1.6 }}>{s.body}</div>
+          </div>
+        ))}
+        <div style={{ fontSize: 12.5, color: COLORS.muted, marginTop: 8 }}>
+          Contacto: tu-correo@ejemplo.com
+        </div>
       </div>
     </div>
   );
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState("signIn"); // "signIn" | "signUp"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [consent, setConsent] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    if (mode === "signUp" && !consent) {
+      setError("Debes aceptar el aviso de privacidad para crear una cuenta.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === "signUp") {
+        const { error: err } = await supabase.auth.signUp({ email, password });
+        if (err) throw err;
+        setMessage("Cuenta creada. Revisa tu correo para confirmar el registro y luego inicia sesión.");
+      } else {
+        const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+        if (err) throw err;
+      }
+    } catch (e) {
+      setError(traducirErrorAuth(e.message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={styles.page}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        * { box-sizing: border-box; }
+      `}</style>
+      <div style={{ ...styles.container, maxWidth: 400, paddingTop: 60 }}>
+        <div style={styles.eyebrow}>REGISTRO PERSONAL</div>
+        <h1 style={styles.title}>Diario de migraña</h1>
+        <p style={styles.subtitle}>
+          {mode === "signIn" ? "Inicia sesión para ver tus registros." : "Crea una cuenta para empezar a registrar."}
+        </p>
+
+        <div style={{ ...styles.card, marginTop: 20 }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+            <ToggleButton active={mode === "signIn"} onClick={() => setMode("signIn")} color={COLORS.violet}>
+              Iniciar sesión
+            </ToggleButton>
+            <ToggleButton active={mode === "signUp"} onClick={() => setMode("signUp")} color={COLORS.violet}>
+              Crear cuenta
+            </ToggleButton>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <Field label="Correo electrónico">
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                style={styles.textInput}
+                placeholder="tu@correo.com"
+              />
+            </Field>
+            <Field label="Contraseña">
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={styles.textInput}
+                placeholder="Mínimo 6 caracteres"
+              />
+            </Field>
+
+            {mode === "signUp" && (
+              <label style={styles.consentRow}>
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  He leído y acepto el{" "}
+                  <button
+                    type="button"
+                    onClick={() => setShowPrivacy(true)}
+                    style={styles.linkBtn}
+                  >
+                    aviso de privacidad
+                  </button>
+                  , y entiendo que registraré datos de salud personales.
+                </span>
+              </label>
+            )}
+
+            {error && <div style={styles.errorBox}>{error}</div>}
+            {message && (
+              <div style={{ ...styles.errorBox, background: "rgba(95,163,154,0.12)", border: `1px solid ${COLORS.teal}`, color: COLORS.teal }}>
+                {message}
+              </div>
+            )}
+
+            <button type="submit" disabled={busy || (mode === "signUp" && !consent)} style={styles.saveButton}>
+              {busy ? "Un momento..." : mode === "signIn" ? "Iniciar sesión" : "Crear cuenta"}
+            </button>
+          </form>
+        </div>
+
+        {mode === "signIn" && (
+          <p style={{ textAlign: "center", marginTop: 14 }}>
+            <button type="button" onClick={() => setShowPrivacy(true)} style={styles.linkBtn}>
+              Ver aviso de privacidad
+            </button>
+          </p>
+        )}
+      </div>
+      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+    </div>
+  );
+}
+
+function traducirErrorAuth(msg) {
+  if (!msg) return "Ocurrió un error. Intenta de nuevo.";
+  if (msg.includes("Invalid login credentials")) return "Correo o contraseña incorrectos.";
+  if (msg.includes("User already registered")) return "Ya existe una cuenta con ese correo. Prueba a iniciar sesión.";
+  if (msg.includes("Password should be")) return "La contraseña debe tener al menos 6 caracteres.";
+  if (msg.includes("Email not confirmed")) return "Confirma tu correo antes de iniciar sesión (revisa tu bandeja de entrada).";
+  return msg;
 }
 
 function shiftDate(iso, delta, setDate) {
@@ -713,6 +1008,16 @@ const styles = {
     height: 32,
     fontSize: 15,
     color: COLORS.muted,
+    cursor: "pointer",
+  },
+  exportBtn: {
+    background: COLORS.surface,
+    border: `1px solid ${COLORS.hairline}`,
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 12.5,
+    color: COLORS.ink,
+    fontFamily: "Inter, sans-serif",
     cursor: "pointer",
   },
   eyebrow: {
@@ -837,5 +1142,54 @@ const styles = {
     color: COLORS.muted,
     lineHeight: 1.6,
     textAlign: "center",
+  },
+  linkBtn: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: COLORS.violet,
+    fontSize: "inherit",
+    fontFamily: "inherit",
+    textDecoration: "underline",
+    cursor: "pointer",
+  },
+  consentRow: {
+    display: "flex",
+    gap: 10,
+    alignItems: "flex-start",
+    fontSize: 12.5,
+    color: COLORS.muted,
+    lineHeight: 1.5,
+    marginBottom: 16,
+    cursor: "pointer",
+  },
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(51,46,69,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
+  modalCard: {
+    background: COLORS.surface,
+    borderRadius: 16,
+    padding: 26,
+    maxWidth: 480,
+    maxHeight: "80vh",
+    overflowY: "auto",
+    width: "100%",
+  },
+  modalClose: {
+    background: COLORS.surfaceRaised,
+    border: `1px solid ${COLORS.hairline}`,
+    borderRadius: 8,
+    width: 30,
+    height: 30,
+    color: COLORS.muted,
+    cursor: "pointer",
+    flexShrink: 0,
   },
 };
